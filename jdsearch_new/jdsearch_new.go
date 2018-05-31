@@ -20,30 +20,23 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
 	// 其他包
 	// "fmt"
-	"math"
+	// "math"
 	// "time"
 )
 
 func init() {
-	BaiduSearch.Register()
+	JDSearch.Register()
 }
 
-var BaiduSearch = &Spider{
-	Name:        "百度搜索",
-	Description: "百度搜索结果 [www.baidu.com]",
+var JDSearch = &Spider{
+	Name:        "京东搜索",
+	Description: "京东搜索结果 [search.jd.com]",
 	// Pausetime: 300,
 	Keyin:        KEYIN,
 	Limit:        LIMIT,
 	EnableCookie: false,
-	// 禁止输出默认字段 Url/ParentUrl/DownloadTime
-	NotDefaultField: true,
-	// 命名空间相对于数据库名，不依赖具体数据内容，可选
-	Namespace: nil,
-	// 子命名空间相对于表名，可依赖具体数据内容，可选
-	SubNamespace: nil,
 	RuleTree: &RuleTree{
 		Root: func(ctx *Context) {
 			ctx.Aid(map[string]interface{}{"loop": [2]int{0, 1}, "Rule": "生成请求"}, "生成请求")
@@ -53,28 +46,32 @@ var BaiduSearch = &Spider{
 
 			"生成请求": {
 				AidFunc: func(ctx *Context, aid map[string]interface{}) interface{} {
-					var duplicatable bool
 					for loop := aid["loop"].([2]int); loop[0] < loop[1]; loop[0]++ {
-						if loop[0] == 0 {
-							duplicatable = true
-						} else {
-							duplicatable = false
-						}
-						ctx.AddQueue(&request.Request{
-							Url:        "http://www.baidu.com/s?ie=utf-8&nojc=1&wd=" + ctx.GetKeyin() + "&rn=50&pn=" + strconv.Itoa(50*loop[0]),
-							Rule:       aid["Rule"].(string),
-							Reloadable: duplicatable,
-						})
+						ctx.AddQueue(
+							&request.Request{
+								// http://search.jd.com/Search?keyword=ddf&enc=utf-8&wq=ddf&pvid=e270328ab6cb40dd8cbcc1d169376e96
+								Url:  "http://search.jd.com/Search?keyword=" + ctx.GetKeyin() + "&enc=utf-8&qrst=1&rt=1&stop=1&click=&psort=&page=" + strconv.Itoa(2*loop[0]+1),
+								Rule: aid["Rule"].(string),
+							},
+						)
+						ctx.AddQueue(
+							&request.Request{
+								Url:  "http://search.jd.com/Search?keyin=" + ctx.GetKeyin() + "&enc=utf-8&qrst=1&rt=1&stop=1&click=&psort=&page=" + strconv.Itoa(2*loop[0]+2),
+								Rule: aid["Rule"].(string),
+							},
+						)
 					}
 					return nil
 				},
 				ParseFunc: func(ctx *Context) {
 					query := ctx.GetDom()
-					total1 := query.Find(".nums").Text()
-					re, _ := regexp.Compile(`[\D]*`)
-					total1 = re.ReplaceAllString(total1, "")
-					total2, _ := strconv.Atoi(total1)
-					total := int(math.Ceil(float64(total2) / 50))
+
+					total1 := query.Find("#top_pagi span.text").Text()
+
+					re, _ := regexp.Compile(`[\d]+$`)
+					total1 = re.FindString(total1)
+					total, _ := strconv.Atoi(total1)
+
 					if total > ctx.GetLimit() {
 						total = ctx.GetLimit()
 					} else if total == 0 {
@@ -92,32 +89,47 @@ var BaiduSearch = &Spider{
 				//注意：有无字段语义和是否输出数据必须保持一致
 				ItemFields: []string{
 					"标题",
-					"内容",
-					"不完整URL",
-					"百度跳转",
+					"价格",
+					"评论数",
+					"星级",
+					"链接",
 				},
 				ParseFunc: func(ctx *Context) {
 					query := ctx.GetDom()
-					query.Find("#content_left .c-container").Each(func(i int, s *goquery.Selection) {
 
-						title := s.Find(".t").Text()
-						content := s.Find(".c-abstract").Text()
-						href, _ := s.Find(".t >a").Attr("href")
-						tar := s.Find(".g").Text()
+					query.Find("#plist .list-h:nth-child(1) > li").Each(func(i int, s *goquery.Selection) {
+						// 获取标题
+						a := s.Find(".p-name a")
+						title := a.Text()
 
 						re, _ := regexp.Compile("\\<[\\S\\s]+?\\>")
 						// title = re.ReplaceAllStringFunc(title, strings.ToLower)
-						// content = re.ReplaceAllStringFunc(content, strings.ToLower)
+						title = re.ReplaceAllString(title, " ")
+						title = strings.Trim(title, " \t\n")
 
-						title = re.ReplaceAllString(title, "")
-						content = re.ReplaceAllString(content, "")
+						// 获取价格
+						price, _ := s.Find("strong[data-price]").First().Attr("data-price")
+
+						// 获取评论数
+						e := s.Find(".extra").First()
+						discuss := e.Find("a").First().Text()
+						re, _ = regexp.Compile(`[\d]+`)
+						discuss = re.FindString(discuss)
+
+						// 获取星级
+						level, _ := e.Find(".star span[id]").First().Attr("class")
+						level = re.FindString(level)
+
+						// 获取URL
+						url, _ := a.Attr("href")
 
 						// 结果存入Response中转
 						ctx.Output(map[int]interface{}{
-							0: strings.Trim(title, " \t\n"),
-							1: strings.Trim(content, " \t\n"),
-							2: tar,
-							3: href,
+							0: title,
+							1: price,
+							2: discuss,
+							3: level,
+							4: url,
 						})
 					})
 				},
